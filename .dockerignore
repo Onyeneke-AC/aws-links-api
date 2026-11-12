@@ -1,0 +1,7 @@
+# Allow-list: only what the image needs is sent to the build. Anything new
+# (e.g. .env, infra/, .git) is excluded by default, so it can't leak in.
+*
+!package.json
+!package-lock.json
+!.npmrc
+!src/

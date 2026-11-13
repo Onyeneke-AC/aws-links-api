@@ -13,3 +13,7 @@ coverage/
 *.tfplan
 tfplan
 crash.log
+
+# Terraform override files (the Makefile creates backend_override.tf transiently)
+*_override.tf
+*_override.tf.json

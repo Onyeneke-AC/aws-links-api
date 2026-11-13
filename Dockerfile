@@ -22,8 +22,11 @@ RUN npm ci --omit=dev --ignore-scripts
 # which alone breaks the 150 MB budget. Alpine's build links them as shared
 # libraries (~94 MB rootfs total) and ships no npm/yarn/corepack at all.
 # `~26` = any 26.x: security patches flow in on rebuild, the major can't move.
+# `apk upgrade`: the base is pinned by digest (reproducible), which also freezes
+# its OS packages; upgrading pulls in fixes released since (e.g. zlib 1.4).
 FROM ${ALPINE_IMAGE}
-RUN apk add --no-cache nodejs-current~26 \
+RUN apk upgrade --no-cache \
+ && apk add --no-cache nodejs-current~26 \
  && addgroup -S -g 10001 app \
  && adduser -S -D -H -u 10001 -G app app
 

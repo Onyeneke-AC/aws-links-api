@@ -133,8 +133,9 @@ push-image: aws-check ## Build the arm64 image for HEAD and push it to ECR (skip
 	  docker buildx build --platform linux/arm64 --provenance=false -t $(IMAGE) --push . ; \
 	fi
 
+# PLAN_ARGS lets CI add flags (e.g. -no-color) while running the same target.
 plan: live-init ## Show what `make up` would change (ENV=dev|prod)
-	$(TF_LIVE) plan $(LIVE_VARS)
+	$(TF_LIVE) plan $(LIVE_VARS) $(PLAN_ARGS)
 
 up: push-image live-init ## Create or update an environment (ENV=dev|prod)
 	$(TF_LIVE) apply $(LIVE_VARS)

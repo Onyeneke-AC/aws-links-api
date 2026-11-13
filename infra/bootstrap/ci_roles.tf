@@ -10,6 +10,8 @@
 #   links-gha-apply-dev   repo:<repo>:environment:dev            terraform apply to dev
 #   links-gha-apply-prod  repo:<repo>:environment:prod           terraform apply to prod (behind approval)
 #
+# <repo> = owner@<owner-id>/name@<repo-id> (see var.github_oidc_repo).
+#
 # A job that declares `environment:` gets the environment sub instead of the
 # branch sub, which is why the apply roles trust environments. The branch is
 # then checked twice: GitHub restricts both environments to main (repo
@@ -23,10 +25,10 @@ locals {
 
   # sub = who may assume; ref = which branch, when sub doesn't say (null = any).
   github_trust = {
-    plan       = { sub = "repo:${var.github_repo}:pull_request", ref = null }        # PR refs vary; role is read-only
-    ecr-push   = { sub = "repo:${var.github_repo}:ref:refs/heads/main", ref = null } # branch is in sub
-    apply-dev  = { sub = "repo:${var.github_repo}:environment:dev", ref = "refs/heads/main" }
-    apply-prod = { sub = "repo:${var.github_repo}:environment:prod", ref = "refs/heads/main" }
+    plan       = { sub = "repo:${var.github_oidc_repo}:pull_request", ref = null }        # PR refs vary; role is read-only
+    ecr-push   = { sub = "repo:${var.github_oidc_repo}:ref:refs/heads/main", ref = null } # branch is in sub
+    apply-dev  = { sub = "repo:${var.github_oidc_repo}:environment:dev", ref = "refs/heads/main" }
+    apply-prod = { sub = "repo:${var.github_oidc_repo}:environment:prod", ref = "refs/heads/main" }
   }
 
   environments = toset(["dev", "prod"])

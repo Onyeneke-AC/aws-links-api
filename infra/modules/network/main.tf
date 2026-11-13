@@ -1,10 +1,12 @@
 # One VPC per environment. Layout for vpc_cidr = 10.10.0.0/16, 2 AZs:
 #
-#   public  10.10.0.0/24  10.10.1.0/24   ALB, NAT gateway (things that face the internet)
-#   private 10.10.10.0/24 10.10.11.0/24  ECS tasks, RDS (no route *from* the internet)
+#   public   10.10.0.0/24  10.10.1.0/24   ALB, NAT gateway (things that face the internet)
+#   private  10.10.10.0/24 10.10.11.0/24  ECS tasks (outbound only, via NAT)
+#   database 10.10.20.0/24 10.10.21.0/24  RDS (no route to or from the internet at all)
 #
 # Private subnets reach out (ECR, Secrets Manager, CloudWatch) through one NAT
-# gateway; nothing on the internet can open a connection into them.
+# gateway; nothing on the internet can open a connection into them. Database
+# subnets can't even reach out: their route table only knows the VPC itself.
 
 data "aws_region" "current" {}
 
@@ -122,4 +124,32 @@ resource "aws_vpc_endpoint" "s3" {
   vpc_endpoint_type = "Gateway"
   route_table_ids   = [aws_route_table.private.id]
   tags              = { Name = "${var.name}-s3" }
+}
+
+# ---- database subnets -------------------------------------------------------------
+# Defence in depth: the DB security group already has no egress, but these
+# subnets also have no route out, so a security-group mistake still can't give
+# the database a path to the internet.
+
+resource "aws_subnet" "database" {
+  count             = var.az_count
+  vpc_id            = aws_vpc.this.id
+  availability_zone = local.azs[count.index]
+  cidr_block        = cidrsubnet(var.vpc_cidr, 24 - tonumber(split("/", var.vpc_cidr)[1]), 20 + count.index)
+
+  tags = { Name = "${var.name}-database-${local.azs[count.index]}", Tier = "database" }
+}
+
+# Deliberately no aws_route resources: only the implicit "local" (in-VPC) route.
+# Explicit table (rather than the VPC's main one) so a route added to the main
+# table later can't leak in here.
+resource "aws_route_table" "database" {
+  vpc_id = aws_vpc.this.id
+  tags   = { Name = "${var.name}-database" }
+}
+
+resource "aws_route_table_association" "database" {
+  count          = var.az_count
+  subnet_id      = aws_subnet.database[count.index].id
+  route_table_id = aws_route_table.database.id
 }

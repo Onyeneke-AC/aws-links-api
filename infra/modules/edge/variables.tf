@@ -13,17 +13,11 @@ variable "public_subnet_ids" {
 }
 
 variable "alb_security_group_id" {
-  description = "ALB security group (network module): HTTP from CloudFront only."
+  description = "ALB security group (network module)."
   type        = string
 }
 
 variable "app_port" {
   type    = number
   default = 3000
-}
-
-variable "price_class" {
-  description = "CloudFront edge locations. PriceClass_200 includes Africa (Lagos) and Europe (London); PriceClass_100 would serve Nigerian users from Europe."
-  type        = string
-  default     = "PriceClass_200"
 }

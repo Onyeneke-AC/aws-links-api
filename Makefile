@@ -140,15 +140,17 @@ up: push-image live-init ## Create or update an environment (ENV=dev|prod)
 	$(TF_LIVE) apply $(LIVE_VARS)
 	@echo ">> $(ENV) is live at $$($(TF_LIVE) output -raw public_url)   next: make smoke ENV=$(ENV)"
 
-smoke: live-init ## End-to-end test of a deployed environment through CloudFront
-	scripts/smoke.sh "$$($(TF_LIVE) output -raw public_url)" "$$($(TF_LIVE) output -raw alb_dns_name)"
+smoke: live-init ## End-to-end test of a deployed environment
+	scripts/smoke.sh "$$($(TF_LIVE) output -raw public_url)"
 
 # After a successful destroy the state file is empty but still exists, which
 # would block bootstrap-destroy. Delete it only if Terraform tracks nothing
-# (the bucket is versioned, so it stays recoverable).
+# (the bucket is versioned, so it stays recoverable). `state list` failing must
+# stop us: its empty output would otherwise look like "nothing left".
 destroy: live-init ## Delete everything in an environment (ENV=dev|prod)
 	$(TF_LIVE) destroy $(LIVE_VARS)
-	@if [ -z "$$($(TF_LIVE) state list)" ]; then \
+	@left=$$($(TF_LIVE) state list) || { echo "!! Could not read state; not deleting it"; exit 1; }; \
+	if [ -z "$$left" ]; then \
 	  aws s3 rm s3://$(STATE_BUCKET)/live/$(ENV)/terraform.tfstate && echo ">> $(ENV) destroyed, empty state removed"; \
 	else \
 	  echo "!! Resources still in state, keeping it:" && $(TF_LIVE) state list; exit 1; \

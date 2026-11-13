@@ -2,18 +2,13 @@
 # Security groups deny everything by default; each rule below is one allowed
 # flow, and sources are other security groups (not IP ranges) wherever possible.
 #
-#   CloudFront --80--> ALB --app_port--> ECS task --5432--> RDS
+#   internet --80--> ALB --app_port--> ECS task --5432--> RDS
 #                                             \--443--> AWS APIs (ECR, Secrets
 #                                                       Manager, CloudWatch Logs)
 
-# AWS-managed list of the IP ranges CloudFront uses to reach origins.
-data "aws_ec2_managed_prefix_list" "cloudfront" {
-  name = "com.amazonaws.global.cloudfront.origin-facing"
-}
-
 resource "aws_security_group" "alb" {
   name        = "${var.name}-alb"
-  description = "ALB: HTTP from CloudFront only"
+  description = "ALB: HTTP from the internet"
   vpc_id      = aws_vpc.this.id
   tags        = { Name = "${var.name}-alb" }
 }
@@ -34,12 +29,13 @@ resource "aws_security_group" "db" {
 
 # ---- ALB ----------------------------------------------------------------------
 
-# Only CloudFront can reach the ALB, so nobody can bypass CloudFront (and its
-# HTTPS) by calling the ALB's DNS name directly.
-resource "aws_vpc_security_group_ingress_rule" "alb_from_cloudfront" {
+# The ALB is the public entry point. Plain HTTP: no domain means no ACM
+# certificate, and CloudFront (HTTPS on *.cloudfront.net) is blocked until the
+# AWS account is verified. Known gap, see DESIGN.md.
+resource "aws_vpc_security_group_ingress_rule" "alb_from_internet" {
   security_group_id = aws_security_group.alb.id
-  description       = "HTTP from CloudFront origin-facing ranges"
-  prefix_list_id    = data.aws_ec2_managed_prefix_list.cloudfront.id
+  description       = "HTTP from anywhere"
+  cidr_ipv4         = "0.0.0.0/0"
   ip_protocol       = "tcp"
   from_port         = 80
   to_port           = 80

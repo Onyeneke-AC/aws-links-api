@@ -1,5 +1,5 @@
 output "public_url" {
-  description = "Use this. HTTPS via CloudFront."
+  description = "Public address (ALB, plain HTTP)."
   value       = module.edge.public_url
 }
 
@@ -18,11 +18,6 @@ output "service_name" {
 
 output "log_group_name" {
   value = module.service.log_group_name
-}
-
-output "alb_dns_name" {
-  description = "Direct ALB address: should answer 403 (proves the origin is locked to CloudFront)."
-  value       = module.edge.alb_dns_name
 }
 
 output "db_instance_id" {

@@ -1,4 +1,4 @@
-# RDS Postgres in private subnets. The master password is generated and stored
+# RDS Postgres in the isolated database subnets. The master password is generated and stored
 # by RDS itself in Secrets Manager (manage_master_user_password), so it never
 # appears in our code, the image, CI logs or Terraform state.
 
@@ -73,7 +73,7 @@ resource "aws_db_instance" "this" {
   max_allocated_storage = var.max_allocated_storage_gb
   storage_encrypted     = true
 
-  # Network: private subnets, no public IP, Postgres only from the app's SG.
+  # Network: database subnets (no route out), no public IP, Postgres only from the app SG.
   db_subnet_group_name   = aws_db_subnet_group.this.name
   vpc_security_group_ids = [var.security_group_id]
   publicly_accessible    = false

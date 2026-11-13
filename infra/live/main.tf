@@ -1,7 +1,7 @@
 # Wiring only: every resource lives in a module. Data flows top to bottom:
 #   network  -> VPC, subnets, security groups
-#   database -> RDS in the private subnets (+ RDS-managed secret)
-#   edge     -> ALB in the public subnets + CloudFront in front
+#   database -> RDS in the database subnets (+ RDS-managed secret)
+#   edge     -> public ALB in the public subnets
 #   service  -> ECS tasks in the private subnets, registered with edge's target
 #               group, reading database's address and secret
 
@@ -20,7 +20,7 @@ module "database" {
   source = "../modules/database"
 
   name                  = local.name
-  subnet_ids            = module.network.private_subnet_ids
+  subnet_ids            = module.network.database_subnet_ids
   security_group_id     = module.network.db_security_group_id
   instance_class        = var.db_instance_class
   backup_retention_days = var.db_backup_retention_days

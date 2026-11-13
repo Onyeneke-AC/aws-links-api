@@ -1,16 +1,19 @@
-# Application Load Balancer: spreads requests over healthy ECS tasks.
+# Application Load Balancer: the public entry point; spreads requests over
+# healthy ECS tasks.
 #
 # Listener rules, checked in priority order:
-#   10  /metrics                         -> 404 (internal only, never public)
-#   20  header X-Origin-Verify == secret -> forward to the app
-#   default (anything else)              -> 403
-# Only our CloudFront distribution knows the secret, so requests that bypass it
-# (including via someone else's CloudFront distribution) are refused.
+#   10  /metrics          -> 404 (internal only, never public)
+#   default (everything)  -> forward to the app
+#
+# Plain HTTP for now: no domain = no ACM certificate, and CloudFront (HTTPS on
+# *.cloudfront.net) is blocked until the AWS account is verified. Next step is
+# CloudFront in front again (see git history, commit f66d06f) or a domain +
+# ACM cert with an HTTPS listener and an HTTP->HTTPS redirect.
 
 resource "aws_lb" "this" {
   name               = "${var.name}-alb"
   load_balancer_type = "application"
-  internal           = false # CloudFront reaches it over the internet; SG allows CloudFront only
+  internal           = false
   subnets            = var.public_subnet_ids
   security_groups    = [var.alb_security_group_id]
 
@@ -52,26 +55,14 @@ resource "aws_lb_target_group" "app" {
   }
 }
 
-# Shared secret between CloudFront and the ALB. Stored in Terraform state: an
-# accepted trade-off because it only proves "came through our CloudFront"; it
-# protects no data. Rotate by replacing this resource and re-applying.
-resource "random_password" "origin_verify" {
-  length  = 32
-  special = false
-}
-
 resource "aws_lb_listener" "http" {
   load_balancer_arn = aws_lb.this.arn
   port              = 80
-  protocol          = "HTTP" # CloudFront terminates HTTPS for users (no domain -> no ALB cert)
+  protocol          = "HTTP"
 
   default_action {
-    type = "fixed-response"
-    fixed_response {
-      content_type = "text/plain"
-      status_code  = "403"
-      message_body = "Forbidden"
-    }
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.app.arn
   }
 }
 
@@ -92,22 +83,5 @@ resource "aws_lb_listener_rule" "block_metrics" {
       status_code  = "404"
       message_body = "Not Found"
     }
-  }
-}
-
-resource "aws_lb_listener_rule" "from_cloudfront" {
-  listener_arn = aws_lb_listener.http.arn
-  priority     = 20
-
-  condition {
-    http_header {
-      http_header_name = "X-Origin-Verify"
-      values           = [random_password.origin_verify.result]
-    }
-  }
-
-  action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.app.arn
   }
 }

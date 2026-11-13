@@ -8,8 +8,13 @@ output "public_subnet_ids" {
 }
 
 output "private_subnet_ids" {
-  description = "For ECS tasks and RDS."
+  description = "For ECS tasks."
   value       = aws_subnet.private[*].id
+}
+
+output "database_subnet_ids" {
+  description = "For RDS. No route outside the VPC."
+  value       = aws_subnet.database[*].id
 }
 
 output "alb_security_group_id" {

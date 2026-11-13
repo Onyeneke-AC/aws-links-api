@@ -9,10 +9,6 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 6.73" # exact versions + hashes pinned in .terraform.lock.hcl
     }
-    random = {
-      source  = "hashicorp/random"
-      version = "~> 3.9"
-    }
   }
 
   # Partial config: the Makefile supplies bucket (derived from the account ID,

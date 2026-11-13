@@ -83,7 +83,7 @@ variable "db_secret_arn" {
 }
 
 variable "public_base_url" {
-  description = "Public URL of the service (CloudFront), used to build short_url. Empty = omit short_url."
+  description = "Public URL of the service (the ALB), used to build short_url. Empty = omit short_url."
   type        = string
   default     = ""
 }

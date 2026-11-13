@@ -3,7 +3,7 @@
 <!-- Max 2 pages. Sections marked TODO are filled in as the build progresses. -->
 
 ## Architecture
-TODO: diagram (CloudFront → ALB → ECS Fargate in private subnets → RDS Postgres).
+TODO: diagram (ALB → ECS Fargate in private subnets → RDS Postgres in isolated database subnets).
 
 ## Key decisions and rejected options
 TODO: compute, database, edge/TLS, secrets, CI/CD, Terraform layout.

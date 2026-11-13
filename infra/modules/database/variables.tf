@@ -4,7 +4,7 @@ variable "name" {
 }
 
 variable "subnet_ids" {
-  description = "Private subnets (at least 2 AZs) for the DB subnet group."
+  description = "Database subnets (at least 2 AZs) for the DB subnet group."
   type        = list(string)
 }
 

@@ -1,0 +1,148 @@
+# Every merge to main ships: build once, deploy dev, wait for approval,
+# deploy the SAME image to prod.
+#
+#   build ──► deploy dev ──► approve prod ──► deploy prod
+#   (ECR :sha)  (apply, rollout    (issue: reply      (same :sha,
+#               check, smoke)      "approve")         same checks)
+#
+# The PR workflow already ran lint, tests, image scan and terraform plan on
+# this exact code (branch protection requires it and requires the branch to
+# be up to date), so main doesn't repeat them; it re-scans the image it ships.
+
+name: main
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["**.md"] # docs-only changes don't redeploy
+  workflow_dispatch: {} # manual re-run of the whole pipeline
+
+# One pipeline at a time. A newer push waits for the running one instead of
+# cancelling it mid-deploy.
+concurrency:
+  group: main-pipeline
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      image_tag: ${{ github.sha }}
+    env:
+      IMAGE_TAG: ${{ github.sha }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # links-gha-ecr-push trusts only pushes to main; it can push to the
+      # links-api repository and nothing else.
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ECR_PUSH_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: gha-build-${{ github.run_id }}
+
+      - name: Image already in ECR?
+        id: exists
+        run: |
+          if aws ecr describe-images --repository-name links-api --image-ids "imageTag=${IMAGE_TAG}" >/dev/null 2>&1; then
+            echo "Image links-api:${IMAGE_TAG} already in ECR (re-run): skipping build"
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Registry login
+        if: steps.exists.outputs.found == 'false'
+        id: registry
+        run: |
+          registry="$(aws sts get-caller-identity --query Account --output text).dkr.ecr.${AWS_REGION}.amazonaws.com"
+          aws ecr get-login-password | docker login --username AWS --password-stdin "$registry"
+          echo "image=${registry}/links-api:${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        if: steps.exists.outputs.found == 'false'
+        with:
+          platforms: arm64
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        if: steps.exists.outputs.found == 'false'
+
+      # Build into the local Docker first so it can be checked BEFORE it
+      # reaches ECR: a failing image never gets a tag there.
+      - name: Build
+        if: steps.exists.outputs.found == 'false'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/arm64
+          load: true
+          push: false
+          provenance: false
+          tags: ${{ steps.registry.outputs.image }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Size budget and vulnerability scan
+        if: steps.exists.outputs.found == 'false'
+        run: scripts/image-checks.sh "${{ steps.registry.outputs.image }}"
+
+      # Tag = commit SHA; the repository is IMMUTABLE, so this tag can never
+      # point at different bytes later. Dev and prod both run exactly this.
+      - name: Push
+        if: steps.exists.outputs.found == 'false'
+        run: docker push "${{ steps.registry.outputs.image }}"
+
+  # Off switch: deploys run only when the repository variable DEPLOYS_ENABLED
+  # is "true" (e.g. off while the AWS account can't run Fargate, or during a
+  # freeze). Approval and prod depend on this job, so they skip too; the image
+  # is still built, scanned and pushed.
+  deploy-dev:
+    needs: build
+    if: vars.DEPLOYS_ENABLED == 'true'
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: dev
+      image_tag: ${{ needs.build.outputs.image_tag }}
+    secrets: inherit
+
+  # Manual gate. GitHub's built-in "required reviewers" on environments needs
+  # GitHub Enterprise for private repos, so the gate is an issue: the job
+  # opens one and waits until an approver comments "approve" (or "deny").
+  approve-prod:
+    needs: deploy-dev
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120 # no answer in 2 h = prod not deployed; re-run the job later
+    permissions:
+      issues: write
+    steps:
+      - uses: trstringer/manual-approval@fa642940caf8412403569b28b2db4a1df08a83a3 # v1.13.1
+        with:
+          secret: ${{ github.token }}
+          approvers: ${{ github.repository_owner }}
+          minimum-approvals: 1
+          issue-title: "Deploy ${{ github.sha }} to prod?"
+          issue-body: |
+            Dev is running `${{ github.sha }}` and passed its rollout check and smoke test.
+            Comment **approve** to deploy the same image to prod, or **deny** to stop.
+
+  deploy-prod:
+    needs: [build, approve-prod]
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: prod
+      image_tag: ${{ needs.build.outputs.image_tag }} # same image dev tested
+    secrets: inherit

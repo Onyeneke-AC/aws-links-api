@@ -45,7 +45,7 @@ LIVE_VARS  = -var-file=envs/$(ENV).tfvars -var region=$(AWS_REGION) -var image_t
 
 .DEFAULT_GOAL := help
 .PHONY: help lint test db-up db-down aws-check bootstrap bootstrap-destroy tf-fmt tf-validate \
-        env-check live-init push-image plan up smoke destroy
+        env-check live-init push-image plan up deploy image-exists rollout-check smoke destroy
 
 help: ## List targets
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
@@ -151,9 +151,22 @@ push-image: aws-check ## Build the arm64 image for HEAD and push it to ECR (skip
 plan: live-init ## Show what `make up` would change (ENV=dev|prod)
 	$(TF_LIVE) plan $(LIVE_VARS) $(PLAN_ARGS)
 
-up: push-image live-init ## Create or update an environment (ENV=dev|prod)
-	$(TF_LIVE) apply $(LIVE_VARS)
+up: push-image deploy ## Laptop: build + push the image for HEAD, then deploy it (ENV=dev|prod)
+
+# Deploy an image that is already in ECR. CI calls this directly (its build
+# job pushed the image); APPLY_ARGS lets it add -auto-approve.
+deploy: image-exists live-init ## Deploy IMAGE_TAG (must already be in ECR) to ENV
+	$(TF_LIVE) apply $(LIVE_VARS) $(APPLY_ARGS)
 	@echo ">> $(ENV) is live at $$($(TF_LIVE) output -raw public_url)   next: make smoke ENV=$(ENV)"
+
+image-exists: aws-check
+	@aws ecr describe-images --repository-name $(ECR_REPO) --image-ids imageTag=$(IMAGE_TAG) >/dev/null 2>&1 || \
+	  { echo "!! $(ECR_REPO):$(IMAGE_TAG) is not in ECR (run make push-image, or let CI build it)"; exit 1; }
+
+# terraform apply can "succeed" after ECS rolled back to the old image; this
+# checks what is actually running (scripts/check-rollout.sh).
+rollout-check: live-init ## Fail if ENV isn't running IMAGE_TAG on all tasks (e.g. rolled back)
+	scripts/check-rollout.sh "$$($(TF_LIVE) output -raw cluster_name)" "$$($(TF_LIVE) output -raw service_name)" $(IMAGE_TAG)
 
 smoke: live-init ## End-to-end test of a deployed environment
 	scripts/smoke.sh "$$($(TF_LIVE) output -raw public_url)"

@@ -23,3 +23,11 @@ output "log_group_name" {
 output "db_instance_id" {
   value = module.database.instance_id
 }
+
+output "dashboard_url" {
+  value = module.observability.dashboard_url
+}
+
+output "slo_alarm_name" {
+  value = module.observability.slo_alarm_name
+}

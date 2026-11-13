@@ -4,6 +4,7 @@
 #   edge     -> public ALB in the public subnets
 #   service  -> ECS tasks in the private subnets, registered with edge's target
 #               group, reading database's address and secret
+#   observability -> SLO alarms on the ALB's metrics, SNS email, dashboard
 
 locals {
   name = "${var.project}-${var.environment}" # e.g. links-dev
@@ -55,4 +56,22 @@ module "service" {
   db_port       = module.database.port
   db_name       = module.database.db_name
   db_secret_arn = module.database.master_user_secret_arn
+
+  # Roll back a deployment if the SLO's 5-minute burn alarm fires during it.
+  deployment_alarm_names = module.observability.deployment_alarm_names
+}
+
+# The alarms only read ALB metrics, so the service can use them without a
+# cycle; the dashboard reads the service's names.
+module "observability" {
+  source = "../modules/observability"
+
+  name                    = local.name
+  alarm_email             = var.alarm_email
+  alb_arn_suffix          = module.edge.alb_arn_suffix
+  target_group_arn_suffix = module.edge.target_group_arn_suffix
+  cluster_name            = module.service.cluster_name
+  service_name            = module.service.service_name
+  db_instance_id          = module.database.instance_id
+  app_log_group_name      = module.service.log_group_name
 }

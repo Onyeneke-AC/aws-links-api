@@ -55,3 +55,9 @@ variable "log_level" {
 variable "log_retention_days" {
   type = number
 }
+
+variable "alarm_email" {
+  description = "Where SLO alerts go. Not in tfvars (keeps personal emails out of git): `export TF_VAR_alarm_email=you@example.com`, or a CI secret."
+  type        = string
+  default     = ""
+}

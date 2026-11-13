@@ -18,6 +18,15 @@ BOOTSTRAP_BACKEND = -backend-config=bucket=$(STATE_BUCKET) \
                     -backend-config=encrypt=true
 LOCAL_BACKEND_OVERRIDE := $(BOOTSTRAP_DIR)/backend_override.tf
 
+# The GitHub repo whose Actions may assume the CI roles, written the way GitHub's
+# OIDC token names it: owner@<owner-id>/repo@<repo-id>. Detected from the git
+# remote you cloned from (gh fills in {owner}/{repo}). Empty (no gh, not logged
+# in, not a GitHub clone) = bootstrap creates no CI roles, so running it in
+# someone else's account never grants a repo access there.
+# Override: make bootstrap GITHUB_OIDC_REPO=owner@123/repo@456
+GITHUB_OIDC_REPO ?= $(shell gh api 'repos/{owner}/{repo}' --jq '"\(.owner.login)@\(.owner.id)/\(.name)@\(.id)"' 2>/dev/null)
+BOOTSTRAP_VARS = -var region=$(AWS_REGION) -var 'github_oidc_repo=$(GITHUB_OIDC_REPO)'
+
 # ---- environments ----
 ENV      ?= dev
 LIVE_DIR := infra/live
@@ -79,12 +88,17 @@ aws-check: ## Show the AWS account/region in use; fail if not logged in
 #   2. remove the override -> `init -migrate-state` copies the state into S3
 # A leftover local terraform.tfstate means a first run didn't finish: resume it
 # locally rather than starting fresh against an empty remote state.
-bootstrap: aws-check ## Create/update state bucket, ECR repo, GitHub OIDC provider
+bootstrap: aws-check ## Create/update state bucket, ECR repo, GitHub OIDC provider, CI roles
+	@repo='$(GITHUB_OIDC_REPO)'; if [ -n "$$repo" ]; then \
+	  echo ">> CI roles will trust GitHub repo $$repo"; \
+	else \
+	  echo ">> No GitHub repo detected (gh missing/logged out, or not a GitHub clone): CI roles skipped"; \
+	fi
 	@if [ -f $(BOOTSTRAP_DIR)/terraform.tfstate ] || ! aws s3api head-bucket --bucket $(STATE_BUCKET) 2>/dev/null; then \
 	  echo ">> First run: local state, then migrate it into s3://$(STATE_BUCKET)" && \
 	  printf 'terraform {\n  backend "local" {}\n}\n' > $(LOCAL_BACKEND_OVERRIDE) && \
 	  $(TF_BOOTSTRAP) init -input=false -reconfigure && \
-	  $(TF_BOOTSTRAP) apply -var region=$(AWS_REGION) && \
+	  $(TF_BOOTSTRAP) apply $(BOOTSTRAP_VARS) && \
 	  rm -f $(LOCAL_BACKEND_OVERRIDE) && \
 	  $(TF_BOOTSTRAP) init -input=false -migrate-state -force-copy $(BOOTSTRAP_BACKEND) && \
 	  rm -f $(BOOTSTRAP_DIR)/terraform.tfstate $(BOOTSTRAP_DIR)/terraform.tfstate.backup && \
@@ -92,7 +106,7 @@ bootstrap: aws-check ## Create/update state bucket, ECR repo, GitHub OIDC provid
 	else \
 	  echo ">> State bucket exists: using remote state" && \
 	  $(TF_BOOTSTRAP) init -input=false -reconfigure $(BOOTSTRAP_BACKEND) && \
-	  $(TF_BOOTSTRAP) apply -var region=$(AWS_REGION); \
+	  $(TF_BOOTSTRAP) apply $(BOOTSTRAP_VARS); \
 	fi
 
 # Reverse of the above: pull state back to local (the bucket is about to be
@@ -105,7 +119,7 @@ bootstrap-destroy: aws-check ## Destroy bootstrap (run after every environment i
 	$(TF_BOOTSTRAP) init -input=false -reconfigure $(BOOTSTRAP_BACKEND)
 	printf 'terraform {\n  backend "local" {}\n}\n' > $(LOCAL_BACKEND_OVERRIDE)
 	$(TF_BOOTSTRAP) init -input=false -migrate-state -force-copy
-	$(TF_BOOTSTRAP) destroy -var region=$(AWS_REGION)
+	$(TF_BOOTSTRAP) destroy $(BOOTSTRAP_VARS)
 	rm -f $(LOCAL_BACKEND_OVERRIDE) $(BOOTSTRAP_DIR)/terraform.tfstate $(BOOTSTRAP_DIR)/terraform.tfstate.backup
 
 # ---- environments: make plan|up|smoke|destroy ENV=dev|prod -----------------------
@@ -133,8 +147,9 @@ push-image: aws-check ## Build the arm64 image for HEAD and push it to ECR (skip
 	  docker buildx build --platform linux/arm64 --provenance=false -t $(IMAGE) --push . ; \
 	fi
 
+# PLAN_ARGS lets CI add flags (e.g. -no-color) while running the same target.
 plan: live-init ## Show what `make up` would change (ENV=dev|prod)
-	$(TF_LIVE) plan $(LIVE_VARS)
+	$(TF_LIVE) plan $(LIVE_VARS) $(PLAN_ARGS)
 
 up: push-image live-init ## Create or update an environment (ENV=dev|prod)
 	$(TF_LIVE) apply $(LIVE_VARS)

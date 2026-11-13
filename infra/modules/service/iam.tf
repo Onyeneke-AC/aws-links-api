@@ -26,6 +26,10 @@ data "aws_iam_policy_document" "ecs_tasks_assume" {
 resource "aws_iam_role" "execution" {
   name               = "${var.name}-ecs-execution"
   assume_role_policy = data.aws_iam_policy_document.ecs_tasks_assume.json
+
+  # Ceiling from infra/bootstrap/boundary.tf. CI's apply roles may only
+  # create roles that carry it, so they can't create an over-powered role.
+  permissions_boundary = var.permissions_boundary_arn
 }
 
 # Least privilege instead of the broad AWS-managed

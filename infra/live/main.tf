@@ -6,8 +6,13 @@
 #               group, reading database's address and secret
 #   observability -> SLO alarms on the ALB's metrics, SNS email, dashboard
 
+data "aws_caller_identity" "current" {}
+
 locals {
   name = "${var.project}-${var.environment}" # e.g. links-dev
+
+  # Created by infra/bootstrap (boundary.tf); referenced by its fixed name.
+  permissions_boundary_arn = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:policy/${var.project}-workload-boundary"
 }
 
 module "network" {
@@ -40,12 +45,13 @@ module "edge" {
 module "service" {
   source = "../modules/service"
 
-  name                = local.name
-  ecr_repository_name = var.ecr_repository_name
-  image_tag           = var.image_tag
-  desired_count       = var.desired_count
-  log_level           = var.log_level
-  log_retention_days  = var.log_retention_days
+  name                     = local.name
+  ecr_repository_name      = var.ecr_repository_name
+  image_tag                = var.image_tag
+  permissions_boundary_arn = local.permissions_boundary_arn
+  desired_count            = var.desired_count
+  log_level                = var.log_level
+  log_retention_days       = var.log_retention_days
 
   subnet_ids        = module.network.private_subnet_ids
   security_group_id = module.network.app_security_group_id

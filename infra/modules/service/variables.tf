@@ -105,3 +105,10 @@ variable "deployment_alarm_names" {
   type        = list(string)
   default     = []
 }
+
+# ---- IAM ----------------------------------------------------------------------------
+
+variable "permissions_boundary_arn" {
+  description = "Permissions boundary for the execution role (created by infra/bootstrap). Required: CI may only create boundary-capped roles."
+  type        = string
+}

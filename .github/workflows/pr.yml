@@ -90,25 +90,10 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # Uncompressed size (what the image takes on disk), the stricter
-      # measure; the compressed size in ECR is about a third of this.
-      - name: Size budget
-        shell: bash
-        run: |
-          bytes=$(docker image inspect --format '{{.Size}}' "links-api:pr-${GITHUB_SHA}")
-          mb=$((bytes / 1000 / 1000))
-          echo "Image size: ${mb} MB (limit ${IMAGE_SIZE_LIMIT_MB} MB)" | tee -a "$GITHUB_STEP_SUMMARY"
-          test "$mb" -le "$IMAGE_SIZE_LIMIT_MB"
-
-      # Aqua's own Trivy image, pinned by digest (no third-party action).
-      # Fails on HIGH/CRITICAL that have a fix available: those we can act on.
-      - name: Trivy scan
-        shell: bash
-        run: |
-          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
-            aquasec/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c \
-            image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --no-progress \
-            "links-api:pr-${GITHUB_SHA}"
+      # Size budget (uncompressed, the stricter measure) + Trivy (fails on
+      # fixable HIGH/CRITICAL). Same script as the main pipeline.
+      - name: Size budget and vulnerability scan
+        run: scripts/image-checks.sh "links-api:pr-${GITHUB_SHA}"
 
   terraform:
     runs-on: ubuntu-24.04

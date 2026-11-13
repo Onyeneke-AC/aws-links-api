@@ -23,15 +23,43 @@ locals {
   oidc_aud_key = "token.actions.githubusercontent.com:aud"
   oidc_ref_key = "token.actions.githubusercontent.com:ref"
 
+  # No repo given (see variables.tf) = no CI roles at all.
+  ci_enabled = var.github_oidc_repo != ""
+
   # sub = who may assume; ref = which branch, when sub doesn't say (null = any).
-  github_trust = {
+  github_trust = local.ci_enabled ? {
     plan       = { sub = "repo:${var.github_oidc_repo}:pull_request", ref = null }        # PR refs vary; role is read-only
     ecr-push   = { sub = "repo:${var.github_oidc_repo}:ref:refs/heads/main", ref = null } # branch is in sub
     apply-dev  = { sub = "repo:${var.github_oidc_repo}:environment:dev", ref = "refs/heads/main" }
     apply-prod = { sub = "repo:${var.github_oidc_repo}:environment:prod", ref = "refs/heads/main" }
-  }
+  } : {}
 
-  environments = toset(["dev", "prod"])
+  ci_count     = local.ci_enabled ? 1 : 0
+  environments = local.ci_enabled ? toset(["dev", "prod"]) : toset([])
+}
+
+# These roles became optional (count), which changes their addresses. `moved`
+# tells Terraform it's the same role, so it renames it in state instead of
+# destroying and recreating it.
+moved {
+  from = aws_iam_role.plan
+  to   = aws_iam_role.plan[0]
+}
+moved {
+  from = aws_iam_role_policy_attachment.plan_readonly
+  to   = aws_iam_role_policy_attachment.plan_readonly[0]
+}
+moved {
+  from = aws_iam_role_policy.plan_state_lock
+  to   = aws_iam_role_policy.plan_state_lock[0]
+}
+moved {
+  from = aws_iam_role.ecr_push
+  to   = aws_iam_role.ecr_push[0]
+}
+moved {
+  from = aws_iam_role_policy.ecr_push
+  to   = aws_iam_role_policy.ecr_push[0]
 }
 
 data "aws_iam_policy_document" "github_trust" {
@@ -70,6 +98,8 @@ data "aws_iam_policy_document" "github_trust" {
 # ---- plan: read-only ---------------------------------------------------------------
 
 resource "aws_iam_role" "plan" {
+  count = local.ci_count
+
   name               = "${var.project}-gha-plan"
   description        = "GitHub Actions, pull requests: terraform plan (read-only)."
   assume_role_policy = data.aws_iam_policy_document.github_trust["plan"].json
@@ -79,14 +109,18 @@ resource "aws_iam_role" "plan" {
 # type it manages. It cannot change anything and doesn't include reading
 # secret values (no secretsmanager:GetSecretValue).
 resource "aws_iam_role_policy_attachment" "plan_readonly" {
-  role       = aws_iam_role.plan.name
+  count = local.ci_count
+
+  role       = aws_iam_role.plan[0].name
   policy_arn = "arn:aws:iam::aws:policy/ReadOnlyAccess"
 }
 
 # The one write: Terraform takes a lock (a .tflock object) even for plan.
 resource "aws_iam_role_policy" "plan_state_lock" {
+  count = local.ci_count
+
   name = "state-lock"
-  role = aws_iam_role.plan.id
+  role = aws_iam_role.plan[0].id
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
@@ -101,14 +135,18 @@ resource "aws_iam_role_policy" "plan_state_lock" {
 # ---- ecr-push: build once on main --------------------------------------------------
 
 resource "aws_iam_role" "ecr_push" {
+  count = local.ci_count
+
   name               = "${var.project}-gha-ecr-push"
   description        = "GitHub Actions, main branch: push images to ${aws_ecr_repository.app.name}."
   assume_role_policy = data.aws_iam_policy_document.github_trust["ecr-push"].json
 }
 
 resource "aws_iam_role_policy" "ecr_push" {
+  count = local.ci_count
+
   name = "push-app-image"
-  role = aws_iam_role.ecr_push.id
+  role = aws_iam_role.ecr_push[0].id
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [

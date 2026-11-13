@@ -19,15 +19,18 @@ variable "github_repo" {
 # GitHub's OIDC "sub" identifies the repo by name AND immutable numeric ID:
 # repo:<owner>@<owner-id>/<repo>@<repo-id>:... If the repo were renamed or
 # deleted and someone recreated the same name, the IDs wouldn't match, so
-# that repo couldn't assume our roles. Find the IDs with:
-#   gh api repos/<owner>/<repo> --jq '"\(.owner.login)@\(.owner.id)/\(.name)@\(.id)"'
+# that repo couldn't assume our roles.
+#
+# No default on purpose: `make bootstrap` detects it from the git remote. Empty
+# = no CI roles, so bootstrapping in another account (e.g. a reviewer's) never
+# grants any GitHub repo access to it.
 variable "github_oidc_repo" {
-  description = "The repo as it appears in GitHub's OIDC sub claim: <owner>@<owner-id>/<repo>@<repo-id>."
+  description = "Repo allowed to assume the CI roles, as in GitHub's OIDC sub: <owner>@<owner-id>/<repo>@<repo-id>. Empty = no CI roles."
   type        = string
-  default     = "Onyeneke-AC@98026459/aws-links-api@1454915925"
+  default     = ""
 
   validation {
-    condition     = can(regex("^[^/@]+@[0-9]+/[^/@]+@[0-9]+$", var.github_oidc_repo))
-    error_message = "Expected <owner>@<owner-id>/<repo>@<repo-id>."
+    condition     = var.github_oidc_repo == "" || can(regex("^[^/@]+@[0-9]+/[^/@]+@[0-9]+$", var.github_oidc_repo))
+    error_message = "Expected <owner>@<owner-id>/<repo>@<repo-id>, or empty for no CI roles."
   }
 }

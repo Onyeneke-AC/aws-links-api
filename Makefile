@@ -45,7 +45,7 @@ LIVE_VARS  = -var-file=envs/$(ENV).tfvars -var region=$(AWS_REGION) -var image_t
 
 .DEFAULT_GOAL := help
 .PHONY: help lint test db-up db-down aws-check bootstrap bootstrap-destroy tf-fmt tf-validate \
-        env-check live-init push-image plan up deploy image-exists rollout-check smoke destroy
+        env-check live-init push-image plan up deploy image-exists rollout-check smoke destroy teardown
 
 help: ## List targets
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
@@ -119,7 +119,7 @@ bootstrap-destroy: aws-check ## Destroy bootstrap (run after every environment i
 	$(TF_BOOTSTRAP) init -input=false -reconfigure $(BOOTSTRAP_BACKEND)
 	printf 'terraform {\n  backend "local" {}\n}\n' > $(LOCAL_BACKEND_OVERRIDE)
 	$(TF_BOOTSTRAP) init -input=false -migrate-state -force-copy
-	$(TF_BOOTSTRAP) destroy $(BOOTSTRAP_VARS)
+	$(TF_BOOTSTRAP) destroy $(BOOTSTRAP_VARS) $(DESTROY_ARGS)
 	rm -f $(LOCAL_BACKEND_OVERRIDE) $(BOOTSTRAP_DIR)/terraform.tfstate $(BOOTSTRAP_DIR)/terraform.tfstate.backup
 
 # ---- environments: make plan|up|smoke|destroy ENV=dev|prod -----------------------
@@ -176,10 +176,30 @@ smoke: live-init ## End-to-end test of a deployed environment
 # (the bucket is versioned, so it stays recoverable). `state list` failing must
 # stop us: its empty output would otherwise look like "nothing left".
 destroy: live-init ## Delete everything in an environment (ENV=dev|prod)
-	$(TF_LIVE) destroy $(LIVE_VARS)
+	$(TF_LIVE) destroy $(LIVE_VARS) $(DESTROY_ARGS)
 	@left=$$($(TF_LIVE) state list) || { echo "!! Could not read state; not deleting it"; exit 1; }; \
 	if [ -z "$$left" ]; then \
 	  aws s3 rm s3://$(STATE_BUCKET)/live/$(ENV)/terraform.tfstate && echo ">> $(ENV) destroyed, empty state removed"; \
 	else \
 	  echo "!! Resources still in state, keeping it:" && $(TF_LIVE) state list; exit 1; \
 	fi
+
+# ---- everything ------------------------------------------------------------------
+# One command, one confirmation: type the account ID (so it can't be confirmed
+# on reflex, or in the wrong account), then prod, dev and bootstrap are
+# destroyed without further prompts, in that order: environments first, because
+# their state lives in the bucket bootstrap deletes. Environments without state
+# are skipped. Stops at the first failure (re-run it to resume).
+teardown: aws-check ## Destroy EVERYTHING: prod, dev, then bootstrap (state bucket, ECR, CI roles)
+	@printf '!! This deletes prod, dev and bootstrap in AWS account %s.\n   Type the account ID to confirm: ' "$(ACCOUNT_ID)"; \
+	read answer; \
+	[ "$$answer" = "$(ACCOUNT_ID)" ] || { echo ">> Aborted, nothing deleted"; exit 1; }
+	@for e in prod dev; do \
+	  if aws s3api head-object --bucket $(STATE_BUCKET) --key live/$$e/terraform.tfstate >/dev/null 2>&1; then \
+	    echo ">> Destroying $$e" && $(MAKE) --no-print-directory destroy ENV=$$e DESTROY_ARGS=-auto-approve || exit 1; \
+	  else \
+	    echo ">> $$e: no state, nothing to destroy"; \
+	  fi; \
+	done
+	@echo ">> Destroying bootstrap" && $(MAKE) --no-print-directory bootstrap-destroy DESTROY_ARGS=-auto-approve
+	@echo ">> Teardown complete: nothing from this project is left in account $(ACCOUNT_ID)"

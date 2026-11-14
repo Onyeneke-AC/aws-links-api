@@ -60,6 +60,8 @@ make teardown               # delete prod, dev and bootstrap; asks you to type t
 
 Everything is derived at run time (the account ID names the state bucket; the GitHub repo the CI roles trust is detected from your clone), so there's nothing to edit first. Bootstrapping in an account from a clone without GitHub access creates no CI roles at all.
 
+**Brand-new AWS accounts:** AWS may refuse to run Fargate tasks until the account is verified. The ECS service then reports "unable to place a task because your account is currently blocked" and `make up` fails at the ECS service after the network, database and load balancer are already created. It isn't a code problem: open a free support case (Account and billing) asking for verification, run `make destroy ENV=dev` meanwhile to stop paying for the half-built environment, and re-run `make up` once AWS confirms. Established accounts aren't affected.
+
 `make help` lists every target. The ones you'll use:
 
 | Target | Does |

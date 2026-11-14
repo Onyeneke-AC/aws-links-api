@@ -72,7 +72,7 @@ On-demand prices for eu-west-1 from the AWS Price List API, per month (730 hours
 
 1. **TLS:** CloudFront in front (restore `f66d06f`) once the account is verified, or a domain with an ACM certificate and HTTP→HTTPS redirect.
 2. **Separate AWS accounts** for dev and prod, with the CI roles per account.
-3. **Database:** a least-privilege app user instead of the master user; automatic redeploy when RDS rotates the password (today it's a runbook step); Multi-AZ for prod.
+3. **Database:** IAM database authentication. The app connects as a `links_app` user (only `SELECT`/`INSERT` on `links`) with a 15-minute token signed by its ECS task role, instead of the master user's password. That fixes two gaps at once: the app is no longer the master user, and with no password there's nothing to rotate, so the manual redeploy after RDS rotates the secret (runbook step B) disappears. Needs one SQL step (`CREATE USER links_app; GRANT rds_iam TO links_app;`), a task role with `rds-db:connect`, and the token signer in the app. Plus Multi-AZ for prod.
 4. **`Idempotency-Key` header** on `POST /links`, so client retries don't create duplicate links.
 5. **Observability:** a slow-burn alarm (6× over 6 h + 30 min, ticket instead of page), a synthetic check so a broken idle service is noticed, and the app's `/metrics` collected (ADOT sidecar).
 6. **Delivery:** a migration tool, autoscaling on request count per task, a WAF with rate limiting on `POST /links`.

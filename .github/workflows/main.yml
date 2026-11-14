@@ -119,6 +119,7 @@ jobs:
   # Manual gate. GitHub's built-in "required reviewers" on environments needs
   # GitHub Enterprise for private repos, so the gate is an issue: the job
   # opens one and waits until an approver comments "approve" (or "deny").
+  # Any one approver is enough (minimum-approvals).
   approve-prod:
     needs: deploy-dev
     runs-on: ubuntu-24.04
@@ -129,7 +130,9 @@ jobs:
       - uses: trstringer/manual-approval@fa642940caf8412403569b28b2db4a1df08a83a3 # v1.13.1
         with:
           secret: ${{ github.token }}
-          approvers: ${{ github.repository_owner }}
+          # Repo variable PROD_APPROVERS = comma-separated GitHub usernames
+          # (each needs access to the repo); unset = the repo owner only.
+          approvers: ${{ vars.PROD_APPROVERS || github.repository_owner }}
           minimum-approvals: 1
           issue-title: "Deploy ${{ github.sha }} to prod?"
           issue-body: |

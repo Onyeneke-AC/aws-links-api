@@ -102,13 +102,22 @@ The `reqId` in a log line matches the ALB's `X-Amzn-Trace-Id`, so one failing re
 **A. Bad deploy: roll back.** Every image is in ECR under its commit SHA (tags are immutable), so rolling back is redeploying the previous SHA.
 
 - Normal path: `git revert` the bad merge in a PR. Checks pass, merge, the pipeline deploys dev then prod (with approval).
-- Emergency, faster (prod only, from a laptop with admin access):
+- Emergency, faster (from a laptop with admin access). The tag must be a **full 40-character SHA that exists in ECR**: not every commit has an image (docs-only merges and PR branch commits don't), so pick from ECR, not from `git log`:
   ```sh
-  git log --oneline -5 main                        # pick the last good SHA
-  make deploy ENV=$E IMAGE_TAG=<full-good-sha>      # same terraform, older image
-  make rollout-check ENV=$E IMAGE_TAG=<full-good-sha>
+  # What's running now (the bad one)
+  aws ecs describe-task-definition --task-definition \
+    "$(aws ecs describe-services --cluster $C --services $S --query 'services[0].taskDefinition' --output text)" \
+    --query 'taskDefinition.containerDefinitions[0].image' --output text
+
+  # Deployable images, newest first (one image can carry several SHA tags if the build was identical)
+  aws ecr describe-images --repository-name links-api \
+    --query 'reverse(sort_by(imageDetails,&imagePushedAt))[0:5].[imagePushedAt,join(`, `,imageTags)]' --output table
+
+  # Pick the newest one OLDER than the bad one, then:
+  make deploy ENV=$E IMAGE_TAG=<full-sha>          # same terraform, older image
+  make rollout-check ENV=$E IMAGE_TAG=<full-sha>
   ```
-  Then revert in git anyway, or the next pipeline run redeploys the bad commit.
+  `gh run list --workflow main.yml --status success` shows which SHAs made it all the way through the pipeline. Then revert in git anyway, or the next pipeline run redeploys the bad commit.
 
 **B. Database password rotated, tasks still use the old one.** RDS rotates the managed secret every 7 days; running tasks read it only at start.
 ```sh

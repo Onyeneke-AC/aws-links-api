@@ -60,3 +60,12 @@ variable "log_retention_days" {
   type        = number
   default     = 7
 }
+
+# Postgres 18 turned log_connections from on/off into a list; this list = the
+# old "on". A variable only because the AWS Emulator still validates it as a
+# boolean, accepting only "1"/"0" (live passes "1" there).
+variable "log_connections" {
+  type     = string
+  default  = "receipt,authentication,authorization"
+  nullable = false
+}

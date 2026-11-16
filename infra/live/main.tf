@@ -31,6 +31,7 @@ module "database" {
   instance_class        = var.db_instance_class
   backup_retention_days = var.db_backup_retention_days
   log_retention_days    = var.log_retention_days
+  log_connections       = var.emulator ? "1" : null # null = the module's Postgres 18 list
 }
 
 module "edge" {

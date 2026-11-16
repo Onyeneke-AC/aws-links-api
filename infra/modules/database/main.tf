@@ -31,7 +31,7 @@ resource "aws_db_parameter_group" "this" {
   # Failed logins are always logged as FATAL regardless.)
   parameter {
     name  = "log_connections"
-    value = "receipt,authentication,authorization"
+    value = var.log_connections
   }
 
   # Log any statement slower than 500 ms (helps with latency incidents).

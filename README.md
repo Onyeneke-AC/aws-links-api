@@ -62,6 +62,21 @@ Everything is derived at run time (the account ID names the state bucket; the Gi
 
 **Brand-new AWS accounts:** AWS may refuse to run Fargate tasks until the account is verified. The ECS service then reports "unable to place a task because your account is currently blocked" and `make up` fails at the ECS service after the network, database and load balancer are already created. It isn't a code problem: open a free support case (Account and billing) asking for verification, run `make destroy ENV=dev` meanwhile to stop paying for the half-built environment, and re-run `make up` once AWS confirms. Established accounts aren't affected.
 
+### Without an AWS account: the AWS Emulator
+
+[AWS Emulator](https://github.com/aws/aws-emulator) is AWS's own local emulator of the AWS APIs. The same Terraform and the same targets run against it with `EMULATOR=1` (Docker only, no AWS account, about 5 minutes for the full cycle):
+
+```sh
+make emu-up                      # starts it at https://127.0.0.1:9297
+make bootstrap EMULATOR=1
+make up ENV=dev EMULATOR=1       # image + all of dev: VPC, RDS, ALB, ECS, alarms, dashboard
+make rollout-check ENV=dev EMULATOR=1
+make teardown EMULATOR=1         # confirm with 000000000000
+make emu-down
+```
+
+With `EMULATOR=1` the Makefile points every AWS call at the emulator and drops any real AWS credentials from the shell, and Terraform refuses any account but the emulator's. What it proves: every resource is accepted, wired and destroyed cleanly, and the deploy, rollout check and teardown targets work. What it doesn't: the emulator records ECS tasks without running containers, its load balancer doesn't forward to targets, its RDS endpoint isn't a full Postgres, and it doesn't enforce IAM. It has three known differences from AWS, worked around only in this mode: the security-group default-egress bug ([aws/aws-emulator#46](https://github.com/aws/aws-emulator/issues/46), `scripts/emulator-sg-workaround.sh`), Postgres 18's `log_connections` still validated as a boolean (the emulator gets `1`), and images pushed through the ECR API because its registry only serves pulls (`scripts/ecr-api-push.sh`).
+
 `make help` lists every target. The ones you'll use:
 
 | Target | Does |

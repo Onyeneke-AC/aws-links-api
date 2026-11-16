@@ -21,6 +21,13 @@ terraform {
 provider "aws" {
   region = var.region
 
+  # AWS Emulator runs only (`make ... EMULATOR=1`). The provider refuses any
+  # account but the emulator's, so `emulator = true` can never reach real AWS.
+  # insecure: S3 Control calls go to 000000000000.localhost, which the
+  # emulator's certificate doesn't name (it names localhost and 127.0.0.1).
+  allowed_account_ids = var.emulator ? ["000000000000"] : null
+  insecure            = var.emulator
+
   default_tags {
     tags = {
       Project   = var.project

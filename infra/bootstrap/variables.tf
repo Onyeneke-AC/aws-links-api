@@ -34,3 +34,11 @@ variable "github_oidc_repo" {
     error_message = "Expected <owner>@<owner-id>/<repo>@<repo-id>, or empty for no CI roles."
   }
 }
+
+# true only for local runs against the AWS Emulator (`make ... EMULATOR=1`);
+# see the provider block. Never set it in tfvars.
+variable "emulator" {
+  description = "Running against the local AWS Emulator, not AWS."
+  type        = bool
+  default     = false
+}

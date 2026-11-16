@@ -10,6 +10,7 @@ A small URL shortener taken to production on AWS: containerised, provisioned wit
 |---|---|
 | [DESIGN.md](DESIGN.md) | Architecture, decisions and rejected options, cost estimate, what's next |
 | [RUNBOOK.md](RUNBOOK.md) | What to do when the `slo-at-risk` alarm fires |
+| [Evidence](#evidence) | What was proven on AWS, and what on the AWS Emulator |
 
 ## API
 
@@ -132,6 +133,37 @@ gh variable set AWS_APPLY_ROLE_ARN --env prod --body <apply_prod role ARN>
 gh secret set ALARM_EMAIL --env prod        # optional, prompts for the address
 gh variable set DEPLOYS_ENABLED --body true # deploys are skipped until this is set
 ```
+
+## Evidence
+
+AWS blocked compute on the account this was built in: Fargate and EC2 vCPU quotas are **0** (defaults 6 and 5), and AWS Support declined to raise them for an account this new. Everything up to running containers was therefore proven on AWS, and the rest on [AWS Emulator](#without-an-aws-account-the-aws-emulator). Each item says which.
+
+**On AWS (eu-west-1, the real account)**
+
+| What | Proof |
+|---|---|
+| Keyless CI: every PR plans both environments through the read-only OIDC role | [PR #14 plan comment](https://github.com/Onyeneke-AC/aws-links-api/pull/14#issuecomment-6930027186): dev and prod, 51 resources each |
+| Every merge builds once and pushes to ECR through the `ecr-push` OIDC role | [main run](https://github.com/Onyeneke-AC/aws-links-api/actions/runs/43957086771) (deploys skipped by `DEPLOYS_ENABLED` while compute is blocked) |
+| `make bootstrap`: state bucket, ECR, OIDC provider, 4 CI roles and the workload permissions boundary | Created in the account; the two runs above assume those roles |
+| `make up ENV=dev`: VPC, subnets, NAT, RDS Postgres 18, ALB | Created on 13 and 16 Nov 2026; ECS then reported *"unable to place a task because your account is currently blocked"*. `make destroy ENV=dev` removed all of it |
+
+**On the AWS Emulator (local, account `000000000000`)**
+
+| What | Proof |
+|---|---|
+| Full lifecycle with no AWS credentials: bootstrap (21 resources) → deploy dev (51) → rollout check → run the task → smoke test → teardown, nothing left | [CI run on PR #14](https://github.com/Onyeneke-AC/aws-links-api/actions/runs/43960969503) (job `emulator`; timeline in its summary), and on every PR since |
+| The SLO alarm fires from real failures and notifies | Same run: database stopped at +70 s → `links-dev-slo-at-risk` ALARM at +188 s → notification in the inbox → app serving again at +191 s |
+| The alarm also clears and sends "resolved" | Local run, 16 Nov 2026 (UTC): healthy 0% errors → **20:43:00** database stopped → 100% 5xx → **20:44:10** ALARM + notification → **20:46:26** database started → 0% errors → **20:52:10** OK + "resolved" notification |
+
+Detection takes about 1–2 minutes: traffic metrics are published once a minute, so it depends on where in that minute the failure lands. Reproduce it with `make emu-chaos-test ENV=dev EMULATOR=1` (add `WAIT_FOR_OK=1` for the clear).
+
+**Not yet proven (needs an account that can run Fargate)**
+
+- Tasks running on Fargate behind the real ALB, and the alarm firing from the ALB's own metrics
+- A deployment the ECS circuit breaker rolls back, and the dev → approval → prod promotion running end to end
+- IAM, security groups and private subnets enforcing access at runtime (the emulator doesn't enforce them; the policies were checked with IAM Access Analyzer and the policy simulator)
+
+With such an account: `make bootstrap`, set the GitHub variables from [the pipeline section](#the-pipeline), `gh variable set DEPLOYS_ENABLED --body true`, merge, and approve the prod issue.
 
 ## Repository layout
 

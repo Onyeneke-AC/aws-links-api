@@ -10,9 +10,10 @@ I built this with **Claude Code** (Anthropic's coding agent) in VS Code, as a pa
 | Reviewed each change before committing; asked for explanations until I could defend every line | Explained each piece and proposed small, separate commits |
 | Ran every command that changes AWS: `make bootstrap`, `make up`, `make destroy`, and set up GitHub (variables, environments, branch protection) | Ran read-only checks: tests, local container runs, `terraform plan` with a throwaway backend, IAM Access Analyzer, the IAM policy simulator, CloudTrail lookups, the AWS Price List API |
 | Opened every PR and merged after the checks passed | Diagnosed failures from logs, CloudTrail and AWS APIs |
+| Decided how to prove the runtime once AWS blocked compute | Researched the options, ran the stack on the local AWS Emulator, and built the scripts that stand in for what it doesn't run |
 
 Ground rules I set:
-- **AI never applies to AWS.** Early on it tried to run `make bootstrap` itself; the permission system blocked it, and from then on it only ran read-only commands.
+- **AI never applies to AWS.** Early on it tried to run `make bootstrap` itself; the permission system blocked it, and from then on it only ran read-only commands. It did apply to the **AWS Emulator**, which isn't AWS: a fake account in Docker on my laptop; in that mode Terraform refuses any account but the emulator's.
 - **No secrets in prompts.** AWS access came from my short-lived SSO session; there are no access keys anywhere in this project.
 - **Small commits, each one explained**, and a running log of real AI mistakes (below), written when they happened.
 
@@ -27,7 +28,8 @@ Nothing was accepted because it looked right. Each layer has its own check:
 | Terraform | `fmt`, `validate`, then `plan` against the real account before any apply; engine-specific values checked against the AWS API |
 | IAM | Access Analyzer (0 errors) and 15 policy-simulator cases (e.g. dev role allowed on dev, denied on prod; can't create a role without the permissions boundary) |
 | Workflows | `actionlint`, `shellcheck`, then real runs on real PRs |
-| Everything | The first real run. Two of the mistakes below were only visible there |
+| Runtime | The whole lifecycle on the AWS Emulator on every PR, including a chaos test the SLO alarm must pass; each new CI step ran locally first |
+| Everything | The first real run. Several of the mistakes below were only visible there |
 
 ## Where I steered it
 
@@ -37,10 +39,13 @@ Some of the better parts of the design came from questioning a proposal:
 - **Database in its own subnets.** I asked whether the database shared the app's subnets. It did, protected only by security groups; it now sits in subnets with no route out at all.
 - **Would a reviewer have to edit anything?** I asked this about the hard-coded GitHub repo in the CI trust policies. It now detects the repo from the clone, and creates no CI roles when there isn't one, so bootstrapping in someone else's account never grants a GitHub repo access to it.
 - **What would I actually type to roll back?** Asking this exposed mistake 8.
+- **No account can run containers: now what?** AWS left Fargate and EC2 at 0 and wouldn't raise them for a new account. I rejected splitting the work across two accounts, and had Claude revert a change that made OIDC optional: I didn't want to bend the design around a temporary limitation. I chose AWS's new emulator instead; Claude checked its source code before we relied on it (every API we use is implemented, but it runs no containers) and ruled out MiniStack, whose alarms can't evaluate our metric-math expression.
+- **Is the emulator a third environment?** No: asking this kept it a place to deploy the same dev and prod configuration, switched with `EMULATOR=1`, not a new environment to maintain.
+- **Is it the emulator or us?** Two emulator failures turned out to be emulator bugs, not ours. One was already reported upstream; I reported the other (Postgres 18's `log_connections` validated with Postgres 17 rules). The workarounds only apply when `EMULATOR=1`.
 
 ## AI mistakes
 
-Real mistakes, in the order they happened. None affected users or left anything broken; two (5 and 6) did happen against real AWS resources.
+Real mistakes, in the order they happened. None affected users or left anything broken; two (5 and 6) did happen against real AWS resources; the rest never reached AWS.
 
 | # | What Claude got wrong | How it was caught | Fix |
 |---|---|---|---|
@@ -52,10 +57,14 @@ Real mistakes, in the order they happened. None affected users or left anything 
 | 6 | Wrote the CI trust policies with GitHub's old OIDC subject format (`repo:owner/name`); GitHub now sends `repo:owner@id/name@id`, so the first PR couldn't log in to AWS | Failed PR check; CloudTrail showed the exact subject GitHub sent (static checks can't know it) | ID-based subject, detected automatically. Safer too: a recreated repo with the same name can't assume the roles |
 | 7 | Measured image size with `docker save`, assuming uncompressed output; Docker Desktop's store exports compressed layers (41 MB instead of 120) | Testing the script locally before committing | Sum of `docker history` layer sizes |
 | 8 | The runbook said to pick a rollback version from `git log`: short SHAs, and many commits have no image (docs-only merges, PR branches) | I asked what exactly to pass to the command | Runbook lists deployable images from ECR, full SHAs only |
+| 9 | A careless `sed` one-liner replaced a line of `infra/live/main.tf` with `X` | `terraform init` failed seconds later; nothing applied or committed | Exact edits only, checked with `git diff` |
+| 10 | Gave the Postgres standing in for RDS in-memory storage, so the chaos test's restart wiped it and the app never recovered. RDS keeps its data across a restart | The first chaos run: errors stayed at 100% after the database came back | A Docker volume. Side finding: `/readyz` said "ready" throughout, since it only checks the database answers (now in DESIGN.md) |
+| 11 | The chaos test's retry loop read the alarm state once, before its first try, so it could never pass, although the alarm had fired | Running the CI job's exact steps locally before pushing; the alarm's history showed it had fired | The check re-reads the alarm on every retry |
 
 ## What I took from it
 
 - **AI knowledge lags fast-moving tools** (Node releases, Fastify minors, Postgres 18, GitHub's token format). Warnings, real API responses and real runs are the source of truth, not the model's memory.
-- **"It validates" isn't "it works".** Four of the eight were invisible to static checks and only showed up against real APIs or real runs, which is why every change went through a plan, a PR run, or a measurement first.
+- **"It validates" isn't "it works".** Most of these were invisible to static checks and only showed up against real APIs or real runs, which is why every change went through a plan, a PR run, or a measurement first.
+- **A stand-in must behave like what it replaces** (mistake 10), and **a test must be able to fail for the right reason** (mistake 11): both were caught because I ran things before trusting them.
 - **Asking "what exactly would I type?"** catches instructions that only sound right.
 - Used this way, it made me faster *and* made me understand the system better: I had to be able to explain every line before it was committed.

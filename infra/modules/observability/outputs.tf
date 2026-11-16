@@ -15,3 +15,7 @@ output "deployment_alarm_names" {
 output "alerts_topic_arn" {
   value = aws_sns_topic.alerts.arn
 }
+
+output "alb_metrics_namespace" {
+  value = var.alb_metrics_namespace
+}

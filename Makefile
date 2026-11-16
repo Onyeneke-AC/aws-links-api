@@ -83,10 +83,20 @@ PUSH_IMAGE = aws ecr get-login-password | docker login --username AWS --password
 endif
 LIVE_VARS  = -var-file=envs/$(ENV).tfvars -var region=$(AWS_REGION) -var image_tag=$(IMAGE_TAG) $(TF_EMULATOR_VAR)
 
+MINUTES   ?= 10
+# Where an environment answers: its load balancer on AWS. On the emulator the
+# load balancer can't forward, so it's the app container emu-run publishes.
+APP_PORT   = $(if $(filter prod,$(ENV)),8081,8080)
+ifeq ($(EMULATOR),1)
+ENV_URL    = echo http://127.0.0.1:$(APP_PORT)
+else
+ENV_URL    = $(TF_LIVE) output -raw public_url
+endif
+
 .DEFAULT_GOAL := help
 .PHONY: help lint test db-up db-down aws-check bootstrap bootstrap-destroy tf-fmt tf-validate \
         env-check live-init push-image plan up deploy image-exists rollout-check smoke destroy teardown \
-        emu-up emu-down
+        emu-up emu-down emu-only emu-run chaos-db traffic alarms
 
 help: ## List targets
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
@@ -139,9 +149,27 @@ emu-up: ## Start the AWS Emulator locally (then add EMULATOR=1 to any target)
 	@echo ">> AWS Emulator $$(docker exec $(EMU_NAME) aws-emulator --version | head -1 | cut -d' ' -f2) up at https://127.0.0.1:$(EMU_PORT)"
 	@echo "   next: make bootstrap EMULATOR=1 && make up ENV=dev EMULATOR=1"
 
-emu-down: ## Stop the AWS Emulator and forget everything it held
-	@docker rm -f $(EMU_NAME) >/dev/null 2>&1 || true
+emu-down: ## Stop the AWS Emulator (and any emu-run containers) and forget everything
+	@docker rm -f $(EMU_NAME) $$(docker ps -aq --filter label=links-emulator) >/dev/null 2>&1 || true
+	@docker network rm $$(docker network ls -q --filter label=links-emulator) >/dev/null 2>&1 || true
+	@docker volume rm $$(docker volume ls -q --filter label=links-emulator) >/dev/null 2>&1 || true
 	rm -rf $(EMU_HOME)
+
+emu-only:
+	@test "$(EMULATOR)" = 1 || { echo "!! This target is for the AWS Emulator: add EMULATOR=1"; exit 1; }
+
+# The emulator records ECS tasks without running them: this runs the service's
+# task definition for real (Postgres 18 standing in for RDS) and subscribes an
+# inbox to the alerts topic, since the emulator sends no email.
+emu-run: emu-only live-init ## Emulator: run ENV's task for real + alarm inbox (after make up)
+	scripts/emulator-run-task.sh "$$($(TF_LIVE) output -raw cluster_name)" "$$($(TF_LIVE) output -raw service_name)" $(APP_PORT)
+	scripts/emulator-alarm-inbox.sh setup "$$($(TF_LIVE) output -raw alerts_topic_arn)" $(PROJECT)-$(ENV)-alarm-inbox
+
+# Failure injection: stop the database the app depends on. Readiness fails and
+# every request becomes a 5xx, which the SLO alarm must catch; start brings it back.
+chaos-db: emu-only ## Emulator: ACTION=stop|start ENV's database
+	@case "$(ACTION)" in stop|start) ;; *) echo "!! ACTION must be stop or start"; exit 1;; esac
+	docker $(ACTION) $(PROJECT)-$(ENV)-db >/dev/null && echo ">> $(PROJECT)-$(ENV)-db: $(ACTION)"
 
 # ---- bootstrap (laptop, one-time) ----------------------------------------------
 # The state bucket is created by this same stack, so on the first run there is
@@ -239,7 +267,24 @@ rollout-check: live-init ## Fail if ENV isn't running IMAGE_TAG on all tasks (e.
 	scripts/check-rollout.sh "$$($(TF_LIVE) output -raw cluster_name)" "$$($(TF_LIVE) output -raw service_name)" $(IMAGE_TAG)
 
 smoke: live-init ## End-to-end test of a deployed environment
-	scripts/smoke.sh "$$($(TF_LIVE) output -raw public_url)"
+	scripts/smoke.sh "$$($(ENV_URL))"
+
+# Steady synthetic traffic with a per-minute summary (MINUTES, RPS=5). On the
+# emulator it also publishes the metrics the ALB would (scripts/traffic.sh).
+traffic: live-init ## Synthetic traffic against ENV for MINUTES (default 10)
+	scripts/traffic.sh "$$($(ENV_URL))" $(MINUTES) $(if $(TF_EMULATOR_VAR),"$$($(TF_LIVE) output -raw alb_metrics_namespace)" "$$($(TF_LIVE) output -raw alb_arn_suffix)",)
+
+# The SLO alarm and its two burn-rate windows; on the emulator also the
+# notifications the alerts topic sent (the emails people would have got).
+alarms: live-init ## Show ENV's SLO alarm states (+ notifications on the emulator)
+	@aws cloudwatch describe-alarms --alarm-names $(PROJECT)-$(ENV)-slo-burn-1h $(PROJECT)-$(ENV)-slo-burn-5m \
+	  --query 'MetricAlarms[].[AlarmName,StateValue,StateUpdatedTimestamp]' --output text
+	@aws cloudwatch describe-alarms --alarm-types CompositeAlarm --alarm-names "$$($(TF_LIVE) output -raw slo_alarm_name)" \
+	  --query 'CompositeAlarms[].[AlarmName,StateValue,StateUpdatedTimestamp]' --output text
+ifeq ($(EMULATOR),1)
+	@echo ">> Notifications (alerts topic -> $(PROJECT)-$(ENV)-alarm-inbox):"
+	@scripts/emulator-alarm-inbox.sh read $(PROJECT)-$(ENV)-alarm-inbox
+endif
 
 # After a successful destroy the state file is empty but still exists, which
 # would block bootstrap-destroy. Delete it only if Terraform tracks nothing

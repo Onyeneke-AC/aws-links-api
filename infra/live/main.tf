@@ -81,4 +81,5 @@ module "observability" {
   service_name            = module.service.service_name
   db_instance_id          = module.database.instance_id
   app_log_group_name      = module.service.log_group_name
+  alb_metrics_namespace   = var.emulator ? "LinksEmulator/ApplicationELB" : null # null = AWS/ApplicationELB
 }

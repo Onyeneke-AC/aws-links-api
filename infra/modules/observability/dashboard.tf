@@ -12,9 +12,9 @@ locals {
   # minimum-traffic guard: the dashboard should show every failure.
   error_rate_metrics = [
     [{ id = "error_rate", label = "5xx error rate %", expression = "IF((FILL(requests,0) + FILL(elb5xx,0)) > 0, 100 * (FILL(app5xx,0) + FILL(elb5xx,0)) / (FILL(requests,0) + FILL(elb5xx,0)), 0)" }],
-    ["AWS/ApplicationELB", "RequestCount", "LoadBalancer", var.alb_arn_suffix, { id = "requests", stat = "Sum", visible = false }],
-    ["AWS/ApplicationELB", "HTTPCode_Target_5XX_Count", "LoadBalancer", var.alb_arn_suffix, { id = "app5xx", stat = "Sum", visible = false }],
-    ["AWS/ApplicationELB", "HTTPCode_ELB_5XX_Count", "LoadBalancer", var.alb_arn_suffix, { id = "elb5xx", stat = "Sum", visible = false }],
+    [var.alb_metrics_namespace, "RequestCount", "LoadBalancer", var.alb_arn_suffix, { id = "requests", stat = "Sum", visible = false }],
+    [var.alb_metrics_namespace, "HTTPCode_Target_5XX_Count", "LoadBalancer", var.alb_arn_suffix, { id = "app5xx", stat = "Sum", visible = false }],
+    [var.alb_metrics_namespace, "HTTPCode_ELB_5XX_Count", "LoadBalancer", var.alb_arn_suffix, { id = "elb5xx", stat = "Sum", visible = false }],
   ]
 }
 
@@ -36,9 +36,9 @@ resource "aws_cloudwatch_dashboard" "this" {
             [{ id = "availability", label = "Availability %", expression = "100 - error_rate" }],
             [{ id = "budget_used", label = "Error budget used %", expression = "100 * error_rate / ${100 - var.slo_target_percent}" }],
             [{ id = "error_rate", expression = "IF((FILL(requests,0) + FILL(elb5xx,0)) > 0, 100 * (FILL(app5xx,0) + FILL(elb5xx,0)) / (FILL(requests,0) + FILL(elb5xx,0)), 0)", visible = false }],
-            ["AWS/ApplicationELB", "RequestCount", "LoadBalancer", var.alb_arn_suffix, { id = "requests", stat = "Sum", visible = false }],
-            ["AWS/ApplicationELB", "HTTPCode_Target_5XX_Count", "LoadBalancer", var.alb_arn_suffix, { id = "app5xx", stat = "Sum", visible = false }],
-            ["AWS/ApplicationELB", "HTTPCode_ELB_5XX_Count", "LoadBalancer", var.alb_arn_suffix, { id = "elb5xx", stat = "Sum", visible = false }],
+            [var.alb_metrics_namespace, "RequestCount", "LoadBalancer", var.alb_arn_suffix, { id = "requests", stat = "Sum", visible = false }],
+            [var.alb_metrics_namespace, "HTTPCode_Target_5XX_Count", "LoadBalancer", var.alb_arn_suffix, { id = "app5xx", stat = "Sum", visible = false }],
+            [var.alb_metrics_namespace, "HTTPCode_ELB_5XX_Count", "LoadBalancer", var.alb_arn_suffix, { id = "elb5xx", stat = "Sum", visible = false }],
           ]
         }
       },
@@ -51,7 +51,7 @@ resource "aws_cloudwatch_dashboard" "this" {
           period = 60
           stat   = "Sum"
           metrics = [
-            ["AWS/ApplicationELB", "RequestCount", "LoadBalancer", var.alb_arn_suffix, { label = "Requests" }],
+            [var.alb_metrics_namespace, "RequestCount", "LoadBalancer", var.alb_arn_suffix, { label = "Requests" }],
           ]
           yAxis = { left = { min = 0 } }
         }
@@ -81,9 +81,9 @@ resource "aws_cloudwatch_dashboard" "this" {
           region = local.region
           period = 60
           metrics = [
-            ["AWS/ApplicationELB", "TargetResponseTime", "LoadBalancer", var.alb_arn_suffix, { stat = "p95", label = "p95" }],
-            ["AWS/ApplicationELB", "TargetResponseTime", "LoadBalancer", var.alb_arn_suffix, { stat = "p50", label = "p50" }],
-            ["AWS/ApplicationELB", "TargetResponseTime", "LoadBalancer", var.alb_arn_suffix, { stat = "p99", label = "p99" }],
+            [var.alb_metrics_namespace, "TargetResponseTime", "LoadBalancer", var.alb_arn_suffix, { stat = "p95", label = "p95" }],
+            [var.alb_metrics_namespace, "TargetResponseTime", "LoadBalancer", var.alb_arn_suffix, { stat = "p50", label = "p50" }],
+            [var.alb_metrics_namespace, "TargetResponseTime", "LoadBalancer", var.alb_arn_suffix, { stat = "p99", label = "p99" }],
           ]
           yAxis = { left = { min = 0 } }
         }

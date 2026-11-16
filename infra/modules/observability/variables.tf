@@ -63,3 +63,14 @@ variable "min_requests_long" {
   type        = number
   default     = 60
 }
+
+# Where the load balancer's request, 5xx and latency metrics are read from.
+# On AWS the ALB publishes them to AWS/ApplicationELB. The local AWS Emulator's
+# load balancer publishes none, and no one may publish into an AWS/ namespace,
+# so emulator runs publish the same metric names and dimensions to their own
+# namespace (scripts/traffic.sh) and the alarms read them from there.
+variable "alb_metrics_namespace" {
+  type     = string
+  default  = "AWS/ApplicationELB"
+  nullable = false
+}

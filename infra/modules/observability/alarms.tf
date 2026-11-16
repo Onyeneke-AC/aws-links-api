@@ -56,7 +56,7 @@ resource "aws_cloudwatch_metric_alarm" "burn" {
   metric_query {
     id = "requests"
     metric {
-      namespace   = "AWS/ApplicationELB"
+      namespace   = var.alb_metrics_namespace
       metric_name = "RequestCount"
       dimensions  = local.alb_dims
       period      = each.value.period
@@ -67,7 +67,7 @@ resource "aws_cloudwatch_metric_alarm" "burn" {
   metric_query {
     id = "app5xx"
     metric {
-      namespace   = "AWS/ApplicationELB"
+      namespace   = var.alb_metrics_namespace
       metric_name = "HTTPCode_Target_5XX_Count"
       dimensions  = local.alb_dims
       period      = each.value.period
@@ -78,7 +78,7 @@ resource "aws_cloudwatch_metric_alarm" "burn" {
   metric_query {
     id = "elb5xx"
     metric {
-      namespace   = "AWS/ApplicationELB"
+      namespace   = var.alb_metrics_namespace
       metric_name = "HTTPCode_ELB_5XX_Count"
       dimensions  = local.alb_dims
       period      = each.value.period

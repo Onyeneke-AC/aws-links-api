@@ -79,6 +79,8 @@ make traffic ENV=dev EMULATOR=1 MINUTES=13          # synthetic traffic, per-min
 make chaos-db ENV=dev EMULATOR=1 ACTION=stop        # after ~3 min: every request now fails
 make alarms ENV=dev EMULATOR=1                      # burn-rate alarms, composite, notifications
 make chaos-db ENV=dev EMULATOR=1 ACTION=start       # recover; the composite clears ~5 min later
+# or the same as a pass/fail test (what CI runs on every PR; WAIT_FOR_OK=1 also waits for the clear):
+make emu-chaos-test ENV=dev EMULATOR=1
 
 make teardown EMULATOR=1         # confirm with 000000000000
 make emu-down
@@ -107,6 +109,8 @@ Optional: `export TF_VAR_alarm_email=you@example.com` before `make up` to get th
 ```
 pull request ──► pr.yml:  app (lint, audit, tests on Postgres) · image (ARM64 build, size, Trivy)
                           · terraform (fmt, validate, plan dev + prod → PR comment)
+                          · emulator (bootstrap, deploy dev, smoke, DB chaos → SLO alarm must fire,
+                            teardown: all on the local AWS Emulator, no AWS account)
 merge to main ─► main.yml: build once → ECR :<sha> → deploy dev → approval → deploy prod (same image)
                            each deploy: terraform apply → check the new image really runs → smoke test
 ```

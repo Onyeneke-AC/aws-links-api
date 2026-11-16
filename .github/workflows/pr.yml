@@ -4,6 +4,9 @@
 #   app        lint, dependency audit, unit + integration tests (real Postgres)
 #   image      arm64 build, size budget, Trivy vulnerability scan
 #   terraform  fmt, validate, plan dev + prod -> one PR comment, updated per push
+#   emulator   the whole lifecycle on the local AWS Emulator, no AWS account:
+#              bootstrap, deploy dev, run it, smoke test, break the database
+#              and require the SLO alarm to fire and notify, teardown
 
 name: pr
 
@@ -179,3 +182,73 @@ jobs:
       - name: Fail if a plan failed
         if: steps.plan_dev.outcome != 'success' || steps.plan_prod.outcome != 'success'
         run: exit 1
+
+  # Everything `make` does against AWS, against AWS's local emulator instead
+  # (README: "Without an AWS account"). No AWS credentials exist in this job:
+  # with EMULATOR=1 the Makefile drops them and Terraform refuses any account
+  # but the emulator's. Same targets as on a laptop.
+  emulator:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read # also lets `gh` read the repo IDs the CI roles trust
+    env:
+      EMULATOR: "1"
+      ENV: dev
+      GH_TOKEN: ${{ github.token }}
+      TF_IN_AUTOMATION: "1"
+      TF_CLI_ARGS_apply: -auto-approve -input=false
+      TF_CLI_ARGS_destroy: -auto-approve -input=false
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      # The app image is ARM64 (Fargate on Graviton) and the runner is x86:
+      # QEMU builds it, and runs it in `emu-run`.
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          platforms: arm64
+
+      - name: Start the AWS Emulator
+        run: make emu-up
+
+      - name: Bootstrap (state bucket, ECR, OIDC provider, CI roles)
+        run: make bootstrap
+
+      - name: Build, push and deploy dev (all of it, ~60 resources)
+        run: make up
+
+      - name: Rollout check
+        run: make rollout-check
+
+      - name: Run the task and test it
+        run: make emu-run smoke
+
+      # Stop the database under traffic: the SLO alarm must go to ALARM and
+      # its notification must arrive, and the app must recover. Results are
+      # in the job summary.
+      - name: Chaos test (SLO alarm)
+        run: make emu-chaos-test
+
+      # Proves the one-command teardown leaves nothing behind.
+      - name: Teardown
+        run: echo 000000000000 | make teardown
+
+      - name: Logs on failure
+        if: failure()
+        run: |
+          docker ps -a
+          for c in links-aws-emulator links-dev-api links-dev-db; do
+            echo "::group::$c"; docker logs --tail 100 "$c" 2>&1 || true; echo "::endgroup::"
+          done
+
+      - name: Stop the emulator
+        if: always()
+        run: make emu-down

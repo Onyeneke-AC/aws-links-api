@@ -17,3 +17,6 @@ crash.log
 # Terraform override files (the Makefile creates backend_override.tf transiently)
 *_override.tf
 *_override.tf.json
+
+# AWS Emulator runtime files (per-run keys, CA certificate): make emu-up
+.emulator/

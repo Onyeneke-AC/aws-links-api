@@ -4,12 +4,43 @@
 AWS_REGION ?= eu-west-1
 export AWS_REGION
 
+# ---- AWS Emulator mode (EMULATOR=1) ----------------------------------------------
+# `make emu-up`, then any target with EMULATOR=1 runs against AWS's local
+# emulator instead of an AWS account: same Terraform, same targets. Every AWS
+# CLI/SDK/Terraform call is pointed at it, with the per-run keys and CA
+# certificate it writes into .emulator/. Real AWS credentials in the shell are
+# dropped for these runs, so EMULATOR=1 can never reach a real account.
+EMULATOR ?=
+EMU_PORT  ?= 9297
+EMU_HOME  := $(CURDIR)/.emulator
+EMU_DIR   := $(EMU_HOME)/.aws/emulator/$(EMU_PORT)
+EMU_IMAGE := links-aws-emulator
+EMU_NAME  := links-aws-emulator
+ifeq ($(EMULATOR),1)
+export AWS_ENDPOINT_URL := https://127.0.0.1:$(EMU_PORT)
+# S3 Control puts the account ID in front of the host (000000000000.<host>):
+# that resolves for localhost, not for an IP. Terraform reads bucket tags this way.
+export AWS_ENDPOINT_URL_S3_CONTROL := https://localhost:$(EMU_PORT)
+export AWS_SHARED_CREDENTIALS_FILE := $(EMU_DIR)/emulator_credentials
+export AWS_CONFIG_FILE := $(EMU_DIR)/config
+export AWS_CA_BUNDLE := $(EMU_DIR)/ca.pem
+export AWS_EC2_METADATA_DISABLED := true
+export AWS_DISABLE_HOST_PREFIX_INJECTION := true
+unexport AWS_PROFILE AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+TF_EMULATOR_VAR := -var emulator=true
+# Make before 4.4 (macOS ships 3.81) doesn't pass exported variables to
+# $(shell ...), so the account lookup below gets them spelled out.
+SHELL_AWS_ENV := env -u AWS_PROFILE -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u AWS_SESSION_TOKEN \
+  AWS_ENDPOINT_URL=$(AWS_ENDPOINT_URL) AWS_SHARED_CREDENTIALS_FILE=$(AWS_SHARED_CREDENTIALS_FILE) \
+  AWS_CONFIG_FILE=$(AWS_CONFIG_FILE) AWS_CA_BUNDLE=$(AWS_CA_BUNDLE) AWS_EC2_METADATA_DISABLED=true
+endif
+
 PROJECT       := links
 BOOTSTRAP_DIR := infra/bootstrap
 TF_BOOTSTRAP  := terraform -chdir=$(BOOTSTRAP_DIR)
 
 # Recursive (=) on purpose: only calls AWS when a target actually uses it.
-ACCOUNT_ID    = $(shell aws sts get-caller-identity --query Account --output text)
+ACCOUNT_ID    = $(shell $(SHELL_AWS_ENV) aws sts get-caller-identity --query Account --output text)
 STATE_BUCKET  = $(PROJECT)-tfstate-$(ACCOUNT_ID)-$(AWS_REGION)
 BOOTSTRAP_BACKEND = -backend-config=bucket=$(STATE_BUCKET) \
                     -backend-config=key=bootstrap/terraform.tfstate \
@@ -25,7 +56,7 @@ LOCAL_BACKEND_OVERRIDE := $(BOOTSTRAP_DIR)/backend_override.tf
 # someone else's account never grants a repo access there.
 # Override: make bootstrap GITHUB_OIDC_REPO=owner@123/repo@456
 GITHUB_OIDC_REPO ?= $(shell gh api 'repos/{owner}/{repo}' --jq '"\(.owner.login)@\(.owner.id)/\(.name)@\(.id)"' 2>/dev/null)
-BOOTSTRAP_VARS = -var region=$(AWS_REGION) -var 'github_oidc_repo=$(GITHUB_OIDC_REPO)'
+BOOTSTRAP_VARS = -var region=$(AWS_REGION) -var 'github_oidc_repo=$(GITHUB_OIDC_REPO)' $(TF_EMULATOR_VAR)
 
 # ---- environments ----
 ENV      ?= dev
@@ -41,11 +72,21 @@ IMAGE_TAG ?= $(shell git rev-parse HEAD)
 ECR_REPO  := links-api
 REGISTRY   = $(ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com
 IMAGE      = $(REGISTRY)/$(ECR_REPO):$(IMAGE_TAG)
-LIVE_VARS  = -var-file=envs/$(ENV).tfvars -var region=$(AWS_REGION) -var image_tag=$(IMAGE_TAG)
+ifeq ($(EMULATOR),1)
+# The emulator's registry serves pulls only, so the image goes in through the
+# ECR upload API (the calls `docker push` makes to ECR behind the scenes).
+PUSH_IMAGE = docker buildx build --platform linux/arm64 --provenance=false -t $(ECR_REPO):$(IMAGE_TAG) --load . && \
+             scripts/ecr-api-push.sh $(ECR_REPO):$(IMAGE_TAG) $(ECR_REPO) $(IMAGE_TAG)
+else
+PUSH_IMAGE = aws ecr get-login-password | docker login --username AWS --password-stdin $(REGISTRY) && \
+             docker buildx build --platform linux/arm64 --provenance=false -t $(IMAGE) --push .
+endif
+LIVE_VARS  = -var-file=envs/$(ENV).tfvars -var region=$(AWS_REGION) -var image_tag=$(IMAGE_TAG) $(TF_EMULATOR_VAR)
 
 .DEFAULT_GOAL := help
 .PHONY: help lint test db-up db-down aws-check bootstrap bootstrap-destroy tf-fmt tf-validate \
-        env-check live-init push-image plan up deploy image-exists rollout-check smoke destroy teardown
+        env-check live-init push-image plan up deploy image-exists rollout-check smoke destroy teardown \
+        emu-up emu-down
 
 help: ## List targets
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
@@ -79,7 +120,28 @@ tf-validate: ## Validate Terraform without touching AWS
 # and show which account is about to be changed.
 aws-check: ## Show the AWS account/region in use; fail if not logged in
 	@test -n "$(ACCOUNT_ID)" || { echo "!! No AWS credentials. Run: aws sso login --profile <profile> and export AWS_PROFILE"; exit 1; }
-	@echo ">> AWS account $(ACCOUNT_ID), region $(AWS_REGION), state bucket $(STATE_BUCKET)"
+	@echo ">> AWS account $(ACCOUNT_ID)$(if $(TF_EMULATOR_VAR), (AWS Emulator at $(AWS_ENDPOINT_URL)),), region $(AWS_REGION), state bucket $(STATE_BUCKET)"
+
+# ---- AWS Emulator (local, no AWS account) ----------------------------------------
+# State lives in the emulator's memory: emu-down forgets everything it held.
+emu-up: ## Start the AWS Emulator locally (then add EMULATOR=1 to any target)
+	docker build -q -t $(EMU_IMAGE) tools/aws-emulator >/dev/null
+	@mkdir -p $(EMU_HOME)
+	@docker rm -f $(EMU_NAME) >/dev/null 2>&1 || true
+	@rm -rf $(EMU_DIR)
+	docker run -d --name $(EMU_NAME) --user "$$(id -u):$$(id -g)" --memory=2g \
+	  -p 127.0.0.1:$(EMU_PORT):$(EMU_PORT) -e HOME=$(EMU_HOME) -v $(EMU_HOME):$(EMU_HOME) \
+	  $(EMU_IMAGE) -p $(EMU_PORT) >/dev/null
+	@for i in $$(seq 1 30); do \
+	  curl -fs --cacert $(EMU_DIR)/ca.pem https://127.0.0.1:$(EMU_PORT)/__admin/health >/dev/null 2>&1 && break; sleep 1; \
+	done; curl -fs --cacert $(EMU_DIR)/ca.pem https://127.0.0.1:$(EMU_PORT)/__admin/health >/dev/null || \
+	  { echo "!! Emulator not healthy:"; docker logs --tail 20 $(EMU_NAME); exit 1; }
+	@echo ">> AWS Emulator $$(docker exec $(EMU_NAME) aws-emulator --version | head -1 | cut -d' ' -f2) up at https://127.0.0.1:$(EMU_PORT)"
+	@echo "   next: make bootstrap EMULATOR=1 && make up ENV=dev EMULATOR=1"
+
+emu-down: ## Stop the AWS Emulator and forget everything it held
+	@docker rm -f $(EMU_NAME) >/dev/null 2>&1 || true
+	rm -rf $(EMU_HOME)
 
 # ---- bootstrap (laptop, one-time) ----------------------------------------------
 # The state bucket is created by this same stack, so on the first run there is
@@ -143,8 +205,7 @@ push-image: aws-check ## Build the arm64 image for HEAD and push it to ECR (skip
 	else \
 	  test -z "$$(git status --porcelain -- Dockerfile .dockerignore package.json package-lock.json .npmrc src)" || \
 	    { echo "!! Uncommitted changes in files that go into the image: commit first"; exit 1; } && \
-	  aws ecr get-login-password | docker login --username AWS --password-stdin $(REGISTRY) && \
-	  docker buildx build --platform linux/arm64 --provenance=false -t $(IMAGE) --push . ; \
+	  $(PUSH_IMAGE) ; \
 	fi
 
 # PLAN_ARGS lets CI add flags (e.g. -no-color) while running the same target.
@@ -156,7 +217,16 @@ up: push-image deploy ## Laptop: build + push the image for HEAD, then deploy it
 # Deploy an image that is already in ECR. CI calls this directly (its build
 # job pushed the image); APPLY_ARGS lets it add -auto-approve.
 deploy: image-exists live-init ## Deploy IMAGE_TAG (must already be in ECR) to ENV
+ifeq ($(EMULATOR),1)
+	@# Emulator bug aws/aws-emulator#46: Terraform's removal of a new security
+	@# group's default egress rule fails there, so the first apply stops with the
+	@# groups tainted. Remove the rule the way the emulator matches it, untaint,
+	@# apply again. Real AWS never takes this path.
+	$(TF_LIVE) apply $(LIVE_VARS) $(APPLY_ARGS) || \
+	  { scripts/emulator-sg-workaround.sh $(LIVE_DIR) && $(TF_LIVE) apply $(LIVE_VARS) $(APPLY_ARGS); }
+else
 	$(TF_LIVE) apply $(LIVE_VARS) $(APPLY_ARGS)
+endif
 	@echo ">> $(ENV) is live at $$($(TF_LIVE) output -raw public_url)   next: make smoke ENV=$(ENV)"
 
 image-exists: aws-check

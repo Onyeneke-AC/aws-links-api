@@ -61,3 +61,11 @@ variable "alarm_email" {
   type        = string
   default     = ""
 }
+
+# true only for local runs against the AWS Emulator (`make ... EMULATOR=1`);
+# see the provider block. Never set it in tfvars.
+variable "emulator" {
+  description = "Running against the local AWS Emulator, not AWS."
+  type        = bool
+  default     = false
+}

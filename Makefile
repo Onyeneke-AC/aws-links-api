@@ -96,7 +96,7 @@ endif
 .DEFAULT_GOAL := help
 .PHONY: help lint test db-up db-down aws-check bootstrap bootstrap-destroy tf-fmt tf-validate \
         env-check live-init push-image plan up deploy image-exists rollout-check smoke destroy teardown \
-        emu-up emu-down emu-only emu-run chaos-db emu-chaos-test traffic alarms
+        emu-up emu-down emu-only emu-run chaos-db emu-chaos-test emu-dashboard traffic alarms
 
 help: ## List targets
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
@@ -170,6 +170,12 @@ emu-run: emu-only live-init ## Emulator: run ENV's task for real + alarm inbox (
 chaos-db: emu-only ## Emulator: ACTION=stop|start ENV's database
 	@case "$(ACTION)" in stop|start) ;; *) echo "!! ACTION must be stop or start"; exit 1;; esac
 	docker $(ACTION) $(PROJECT)-$(ENV)-db >/dev/null && echo ">> $(PROJECT)-$(ENV)-db: $(ACTION)"
+
+# The emulator has no console: render ENV's CloudWatch dashboard to a local
+# page (the last MINUTES, default 30) and open it.
+emu-dashboard: emu-only ## Emulator: render ENV's CloudWatch dashboard to a local page and open it
+	scripts/emulator-dashboard.sh $(PROJECT)-$(ENV) $(EMU_HOME)/dashboard-$(ENV) $(if $(filter command line,$(origin MINUTES)),$(MINUTES),30)
+	@command -v open >/dev/null && open $(EMU_HOME)/dashboard-$(ENV)/index.html || true
 
 # The incident as a pass/fail test (CI runs it on every PR): traffic, stop the
 # database, the SLO alarm must fire and notify, the app must recover.

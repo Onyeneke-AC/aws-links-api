@@ -71,11 +71,22 @@ make emu-up                      # starts it at https://127.0.0.1:9297
 make bootstrap EMULATOR=1
 make up ENV=dev EMULATOR=1       # image + all of dev: VPC, RDS, ALB, ECS, alarms, dashboard
 make rollout-check ENV=dev EMULATOR=1
+make emu-run ENV=dev EMULATOR=1  # run the task definition for real + an inbox for the alarm
+make smoke ENV=dev EMULATOR=1
+
+# the SLO alarm, end to end (two terminals):
+make traffic ENV=dev EMULATOR=1 MINUTES=13          # synthetic traffic, per-minute error rate
+make chaos-db ENV=dev EMULATOR=1 ACTION=stop        # after ~3 min: every request now fails
+make alarms ENV=dev EMULATOR=1                      # burn-rate alarms, composite, notifications
+make chaos-db ENV=dev EMULATOR=1 ACTION=start       # recover; the composite clears ~5 min later
+
 make teardown EMULATOR=1         # confirm with 000000000000
 make emu-down
 ```
 
-With `EMULATOR=1` the Makefile points every AWS call at the emulator and drops any real AWS credentials from the shell, and Terraform refuses any account but the emulator's. What it proves: every resource is accepted, wired and destroyed cleanly, and the deploy, rollout check and teardown targets work. What it doesn't: the emulator records ECS tasks without running containers, its load balancer doesn't forward to targets, its RDS endpoint isn't a full Postgres, and it doesn't enforce IAM. It has three known differences from AWS, worked around only in this mode: the security-group default-egress bug ([aws/aws-emulator#46](https://github.com/aws/aws-emulator/issues/46), `scripts/emulator-sg-workaround.sh`), Postgres 18's `log_connections` still validated as a boolean (the emulator gets `1`), and images pushed through the ECR API because its registry only serves pulls (`scripts/ecr-api-push.sh`).
+With `EMULATOR=1` the Makefile points every AWS call at the emulator and drops any real AWS credentials from the shell, and Terraform refuses any account but the emulator's.
+
+**What runs for real and what stands in:** the emulator records ECS tasks without starting containers, its RDS endpoint isn't a full Postgres, its load balancer doesn't forward to targets and publishes no request metrics, and it sends no email. So `emu-run` plays the ECS agent: it runs the image named in the service's task definition (pulled from the emulator's ECR) with that definition's settings and the credentials RDS put in Secrets Manager, against Postgres 18 standing in for RDS, published on `127.0.0.1:8080` in place of the load balancer. `traffic` measures every response the way the load balancer would and publishes the same metric names, which the unchanged SLO alarms read from a separate namespace (`AWS/` is reserved for AWS). The alerts topic delivers to an SQS inbox instead of email. The emulator doesn't enforce IAM, security groups or private subnets either: those are only proven on AWS. It has three known differences from AWS, worked around only in this mode: the security-group default-egress bug ([aws/aws-emulator#46](https://github.com/aws/aws-emulator/issues/46), `scripts/emulator-sg-workaround.sh`), Postgres 18's `log_connections` still validated as a boolean (the emulator gets `1`), and images pushed through the ECR API because its registry only serves pulls (`scripts/ecr-api-push.sh`).
 
 `make help` lists every target. The ones you'll use:
 
@@ -84,6 +95,8 @@ With `EMULATOR=1` the Makefile points every AWS call at the emulator and drops a
 | `make up ENV=dev\|prod` | Build and push the image for the current commit, then `terraform apply` |
 | `make plan ENV=…` | What `up` would change |
 | `make smoke ENV=…` | End-to-end test of a deployed environment |
+| `make traffic ENV=… MINUTES=10` | Steady synthetic traffic, with the error rate each minute |
+| `make alarms ENV=…` | State of the SLO alarm and its two burn-rate windows |
 | `make destroy ENV=…` | Delete one environment |
 | `make teardown` | Delete everything this project created |
 

@@ -266,10 +266,12 @@ ifeq ($(EMULATOR),1)
 	@# apply again. Real AWS never takes this path.
 	$(TF_LIVE) apply $(LIVE_VARS) $(APPLY_ARGS) || \
 	  { scripts/emulator-sg-workaround.sh $(LIVE_DIR) && $(TF_LIVE) apply $(LIVE_VARS) $(APPLY_ARGS); }
+	@# public_url is the emulated load balancer, which can't serve requests.
+	@echo ">> $(ENV) is deployed on the emulator   next: make emu-run ENV=$(ENV) EMULATOR=1 (then $$($(ENV_URL)))"
 else
 	$(TF_LIVE) apply $(LIVE_VARS) $(APPLY_ARGS)
-endif
 	@echo ">> $(ENV) is live at $$($(TF_LIVE) output -raw public_url)   next: make smoke ENV=$(ENV)"
+endif
 
 image-exists: aws-check
 	@aws ecr describe-images --repository-name $(ECR_REPO) --image-ids imageTag=$(IMAGE_TAG) >/dev/null 2>&1 || \
